@@ -4360,3 +4360,96 @@ From an ecosystem-wide investigation of ad-hoc dispatch architecture (2026-05-29
     corpora that DO emit constant-pushref-SCPT `CallV`, but is a no-op for Dead Estate. Re-evaluate
     against a corpus that actually contains the idiom before building.
 
+## Adversarial audit findings (2026-06-12)
+
+All items verified empirically or by direct code reading. Ordered by severity.
+
+1. **CRITICAL — bare `getInstanceField`/`setInstanceField` identifiers emitted (TS2304,
+   non-compiling output; regression triggered by the receiver-typing arc, item 9 above).**
+   `crates/backends/reincarnate-backend-typescript/src/rewrites/gamemaker.rs` (~1720-1859)
+   rewrites `GameMaker.Instance.getOn/setOn` calls to a bare unqualified
+   `JsExpr::Var("getInstanceField")` instead of `_rt.getInstanceField(...)` — these are
+   runtime-instance closures per Law 5, not free functions. The rewrite bug predates the arc
+   (`e2d4645c`, 2026-05-23) but `950f5e4a` + `4de16db9` changed which call shapes route
+   through it, triggering it at volume: TS2304 Dead Estate 18→3,899, Bounty 25→839, Undertale
+   ~2,937→~28,072. Bounty total regressed 2,208→3,819 (+73%); Undertale 113,516→115,747.
+   Emitted output does not compile (e.g. `Bounty/_init.ts:376`). **Dead Estate's "clean"
+   22,445 baseline (item 9) silently contains ~3,899 of these.** Fix: qualify the callee with
+   `_rt`. Root cause of the miss: only Dead Estate totals were measured after the arc, never
+   per-code diffs or other corpora — cross-corpus + per-code measurement must accompany
+   future inference arcs.
+
+2. **HIGH — solver: collector `Equal(arg_var, InferVar(0))` path is defective and
+   redundant.** `constraint_collect.rs` `Op::Call`/`MethodCall` arg handling (~866-877,
+   ~948-957) emits `Equal(arg_var, param_ty.clone())` when the callee sig param is
+   `InferVar` — but the sig placeholder is the raw `Type::fresh_var()` = `InferVar
+   (TypeVarId(0))`, which the arena dereferences as REAL slot 0 (`module.globals[0]`).
+   Verified on Dead Estate: 18,506 such constraints; effect today is mild (2 params degraded
+   GMLObject→unknown: `gif_std_Std_stringify`, `gml_std_enum_toString`) only because slot 0
+   happens to resolve to `Value` — if `globals[0]` were concrete this is a mass-aliasing
+   hazard. The path also silently pre-empts the post-fixpoint join (item 9's `4de16db9`) for
+   any param with ≥2 direct callers: binds first-caller, poisons to `Value` on disagreement,
+   and the join then skips the now-non-free var — so the join currently fires mostly for
+   self/receiver params (the one path that doesn't emit this `Equal`). Fix: remove the path
+   (seeding/join is the sound interprocedural channel) and/or make `fresh_var` non-colliding;
+   re-measure.
+
+3. **MEDIUM — solver: join-precedence gate tests the wrong predicate for `incomplete`
+   params (active, currently benign).** The HasField single-owner gate and the Step-4.5 gate
+   test `join_param_vars` membership; `incomplete` params are excluded from `join_param_vars`
+   by construction, so they PASS the gates and can be heuristic-bound despite a known-
+   incomplete caller set. Verified: 3 incomplete params bound on Dead Estate
+   (`increaseAnyaSpeed`→`OAnya` etc.) — all currently body-consistent, zero wrong emitted
+   code today, but unsound in principle. Fix: gate the guessers on `!incomplete` (or an
+   explicit has-any-caller-evidence check); decide policy for the 3 affected.
+
+4. **MEDIUM — solver structural debts (code-verified):**
+   - `unify`'s `(Union, _) => Value` catch-all destroys all unions — blocks union support
+     structurally (same arm already flagged as the multi-call-site UNION narrowing
+     prerequisite above).
+   - `MAX_JOIN_PASSES = 3` uses `assert!` — panics in release on deep join chains; should
+     degrade to fallback, not crash.
+   - Occurs-check failure silently binds `Value` — a loud-posture violation (CLAUDE.md); should
+     diagnose instead.
+   - The `ConstraintCollect` `Transform` is dead relative to the solver (the solver
+     re-collects itself; the `Transform`'s `RefCell` output is never read), and the two
+     collection paths diverge on `runtime_registry` handling — remove or reconcile.
+
+   **Prognosis:** the equality-arena + outside-join accretion (11 interacting mechanisms, no
+   statable single invariant) points toward an eventual biunification-style solver (native
+   lower/upper bound sets) as the long-term direction. Track, do not build yet.
+
+5. **Flash CC corpus panics at HEAD (pre-existing, not this arc).** `builtin_type_suffix`'s
+   unsupported-type panic, introduced by `1b7c0bf6` (a silent fallback replaced by a hard
+   panic), makes Flash currently unmeasurable end-to-end. Needs its own fix before Flash can
+   be used as a cross-corpus check for future arcs (see item 1's lesson).
+
+6. **Cross-engine generalization debts (Law 1/2 design audit):**
+   - Runtime-bodies M+N is ~3.5% real (40/1139 GML functions use `attach_runtime_body`;
+     Flash's 9,968 LOC and Twine's 8,580 LOC handwritten TS use it zero times) — a second
+     backend currently implies rewriting ~everything by hand, the exact M×N the design
+     (CLAUDE.md, Hard Constraints) forbids.
+   - `TypeDecl::Object.parent: Option<TypeId>` (single parent) cannot represent AS3
+     interfaces — neutrality is currently bought by discarding source info (Law 2/4). Honest
+     form is multi-parent; join/LCA (item 9's `4de16db9`) must generalize to a
+     common-ancestor-*set*.
+   - `param_lower_bounds` has exactly one producer (GML `self`) — general-in-name-only until
+     a second engine populates it.
+   - The completeness/address-taken machinery (`864cddf7`, item 9) assumes closed-world
+     enumerable callers. This holds for narrative engines (Twine by-name passages, Ren'Py
+     labels, HyperCard message sends) ONLY IF their frontends emit those dispatch forms as
+     opaque indirect calls — nothing in core enforces that frontend discipline today.
+
+7. **Platform interface substrate (autopsy, docs/architecture.md:358-473).** The documented
+   handles/primitives/enums design is sound and Love2D-implementable, but: no codified
+   contract exists (loose module functions, no interface/trait, no build gate — bypasses are
+   free); DOM types leak through realized signatures (`ImageBitmap`, `Document = document`
+   defaults, `HTMLCanvasElement`, `CanvasRenderingContext2D`, `DOMRect` — un-portable by
+   construction); graphics migration never happened (52 raw ctx sites in
+   `gamemaker/runtime.ts` alone; frozen since 2026-03-15); `setColorTransform` is a silent
+   no-op (fail-loud violation; correct impl already specified at architecture.md:455);
+   consumer call sites bypass the abstraction and bind page-global `document`/`window`
+   directly (breaks Law 5 multi-instance). Fix order: codify the contract as real
+   interfaces + a build-failing bypass lint FIRST, then purge DOM types from signatures, then
+   migrate graphics.
+
