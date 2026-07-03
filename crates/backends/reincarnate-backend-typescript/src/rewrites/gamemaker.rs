@@ -137,24 +137,13 @@ pub fn rewrite_introduced_direct_calls(_func_name: &str) -> &'static [&'static s
 /// if any.  Used by import generation to emit the correct imports before
 /// the rewrite pass runs.  Kept for Flash/Twine callers that have the
 /// (system, method) pair from Op::SystemCall.
-pub fn rewrite_introduced_calls(system: &str, method: &str) -> &'static [&'static str] {
-    match (system, method) {
-        ("GameMaker.Global", "set") | ("GameMaker.Global", "get") => &["global"],
-        ("GameMaker.Instance", "getOn") => &["getInstanceField"],
-        ("GameMaker.Instance", "setOn") => &["setInstanceField", "setInstanceFieldIndex"],
-        ("GameMaker.Instance", "getAll") => &["getAllField"],
-        ("GameMaker.Instance", "setAll") => &["setAllField"],
-        ("GameMaker.Instance", "getField") => &["getInstanceField"],
-        ("GameMaker.Instance", "setField") => &["setInstanceField"],
-        ("GameMaker.Instance", "withInstances") => &["withInstances"],
-        ("GameMaker.Instance", "getInstances") => &["getInstances"],
-        // getOther/setOther rewrite to expressions using `other` (the collision partner
-        // param). `other` itself is a param reference, not an import — only `setOtherField`
-        // needs importing.
-        ("GameMaker.Instance", "getOther") => &[],
-        ("GameMaker.Instance", "setOther") => &["setOtherField"],
-        _ => &[],
-    }
+pub fn rewrite_introduced_calls(_system: &str, _method: &str) -> &'static [&'static str] {
+    // GameMaker.Instance/Global syscalls rewrite to rt-qualified member calls
+    // (`_rt.getInstanceField(...)`, `this._rt.setOtherField(...)`, etc.) — these
+    // are stateful `GameRuntime` closures (Law 5), reached through the runtime
+    // handle, not bare free-function identifiers. They introduce no free-function
+    // imports.
+    &[]
 }
 
 /// Returns the bare function names that a GML plain-call rewrite will introduce,
@@ -162,21 +151,11 @@ pub fn rewrite_introduced_calls(system: &str, method: &str) -> &'static [&'stati
 ///
 /// Used by import generation for `Op::Call` nodes that are GML syscalls registered
 /// as plain runtime functions (Phase 2+).  Arg 0 of these calls is always `_rt`.
-pub fn rewrite_introduced_calls_by_name(name: &str) -> &'static [&'static str] {
-    match name {
-        "GameMaker.Global.set" | "GameMaker.Global.get" => &["global"],
-        "GameMaker.Instance.getOn" => &["getInstanceField"],
-        "GameMaker.Instance.setOn" => &["setInstanceField", "setInstanceFieldIndex"],
-        "GameMaker.Instance.getAll" => &["getAllField"],
-        "GameMaker.Instance.setAll" => &["setAllField"],
-        "GameMaker.Instance.getField" => &["getInstanceField"],
-        "GameMaker.Instance.setField" => &["setInstanceField"],
-        "GameMaker.Instance.withInstances" => &["withInstances"],
-        "GameMaker.Instance.getInstances" => &["getInstances"],
-        "GameMaker.Instance.getOther" => &[],
-        "GameMaker.Instance.setOther" => &["setOtherField"],
-        _ => &[],
-    }
+pub fn rewrite_introduced_calls_by_name(_name: &str) -> &'static [&'static str] {
+    // See `rewrite_introduced_calls`: these syscalls rewrite to rt-qualified
+    // member calls, not bare free-function identifiers, so they introduce no
+    // free-function imports.
+    &[]
 }
 
 /// Extract the full dotted call name from a nested `JsExpr::Field` callee.
@@ -813,6 +792,21 @@ fn rt_field(field: &str, in_class: bool) -> JsExpr {
     JsExpr::Field {
         object: Box::new(rt),
         field: field.into(),
+    }
+}
+
+/// Build a call to a `GameRuntime` instance method: `_rt.method(args)` in
+/// free-function context (`_init.ts` scripts receive `_rt` as a parameter) or
+/// `this._rt.method(args)` in class-method context (event handlers).
+///
+/// These runtime methods are stateful closures on the runtime instance (Law 5),
+/// not free functions — emitting a bare `method(args)` identifier produces an
+/// unresolved name (TS2304). `in_class` is `event_name.is_some()`, matching the
+/// receiver-selection used by `rt_field` / `cast_global_for_field`.
+fn rt_call(method: &str, args: Vec<JsExpr>, in_class: bool) -> JsExpr {
+    JsExpr::Call {
+        callee: Box::new(rt_field(method, in_class)),
+        args,
     }
 }
 
@@ -1644,33 +1638,34 @@ fn try_rewrite_system_call(
                 args: cap_vals,
             })
         }
-        // GameMaker.Instance.getInstances() → getInstances()
-        ("GameMaker.Instance", "getInstances") if args.is_empty() => Some(JsExpr::Call {
-            callee: Box::new(JsExpr::Var("getInstances".into())),
-            args: vec![],
-        }),
-        // GameMaker.Instance.withInstances(target, closure) → withInstances(target, closure)
+        // GameMaker.Instance.getInstances() → _rt.getInstances()
+        ("GameMaker.Instance", "getInstances") if args.is_empty() => {
+            Some(rt_call("getInstances", vec![], event_name.is_some()))
+        }
+        // GameMaker.Instance.withInstances(target, closure) → _rt.withInstances(target, closure)
         //
         // At this point the closure arg has already been rewritten (children-first)
         // from SugarCube.Engine.closure(...) → ArrowFunction.
         ("GameMaker.Instance", "withInstances") if args.len() == 2 => {
             let callback = take_arg(args, "GameMaker.Instance.withInstances");
             let target = take_arg(args, "GameMaker.Instance.withInstances");
-            Some(JsExpr::Call {
-                callee: Box::new(JsExpr::Var("withInstances".into())),
-                args: vec![target, callback],
-            })
+            Some(rt_call(
+                "withInstances",
+                vec![target, callback],
+                event_name.is_some(),
+            ))
         }
-        // GameMaker.Global.set(name, val) → variable_global_set(name, val)
+        // GameMaker.Global.set(name, val) → _rt.variable_global_set(name, val)
         // Constant-key sets are intercepted at statement level (→ global.name = val).
         // This handles the expression-position fallback and dynamic keys.
         ("GameMaker.Global", "set") if args.len() == 2 => {
             let val = take_arg(args, "GameMaker.Global.set");
             let name = take_arg(args, "GameMaker.Global.set");
-            Some(JsExpr::Call {
-                callee: Box::new(JsExpr::Var("variable_global_set".into())),
-                args: vec![name, val],
-            })
+            Some(rt_call(
+                "variable_global_set",
+                vec![name, val],
+                event_name.is_some(),
+            ))
         }
         // GameMaker.Global.get(name) → global.name (constant key)
         // or variable_global_get(name) (dynamic key fallback)
@@ -1688,10 +1683,11 @@ fn try_rewrite_system_call(
                     field: field_name,
                 })
             } else {
-                Some(JsExpr::Call {
-                    callee: Box::new(JsExpr::Var("variable_global_get".into())),
-                    args: vec![name],
-                })
+                Some(rt_call(
+                    "variable_global_get",
+                    vec![name],
+                    event_name.is_some(),
+                ))
             }
         }
         // GameMaker.Instance.getOn(objName, field) → ObjName.instances[0]!.field
@@ -1716,10 +1712,11 @@ fn try_rewrite_system_call(
                 }
             } else {
                 let obj_id = resolve_instance_target(obj_id, object_names);
-                Some(JsExpr::Call {
-                    callee: Box::new(JsExpr::Var("getInstanceField".into())),
-                    args: vec![obj_id, field],
-                })
+                Some(rt_call(
+                    "getInstanceField",
+                    vec![obj_id, field],
+                    event_name.is_some(),
+                ))
             }
         }
         // GameMaker.Instance.getOn(objName, field, index) → ObjName.instances[0]!.field[index]
@@ -1744,10 +1741,11 @@ fn try_rewrite_system_call(
                 }
             } else {
                 let obj_id = resolve_instance_target(obj_id, object_names);
-                JsExpr::Call {
-                    callee: Box::new(JsExpr::Var("getInstanceField".into())),
-                    args: vec![obj_id, field],
-                }
+                rt_call(
+                    "getInstanceField",
+                    vec![obj_id, field],
+                    event_name.is_some(),
+                )
             };
             Some(JsExpr::Index {
                 collection: Box::new(base),
@@ -1763,10 +1761,11 @@ fn try_rewrite_system_call(
                 strip_int_coerce(take_arg(args, "GameMaker.Instance.setOn")),
                 object_names,
             );
-            Some(JsExpr::Call {
-                callee: Box::new(JsExpr::Var("setInstanceField".into())),
-                args: vec![obj_id, field, val],
-            })
+            Some(rt_call(
+                "setInstanceField",
+                vec![obj_id, field, val],
+                event_name.is_some(),
+            ))
         }
         // GameMaker.Instance.setOn(objId, field, index, val) → setInstanceFieldIndex(objId, field, index, val)
         // Named object+field case is handled at statement level (→ indexed assignment).
@@ -1778,44 +1777,47 @@ fn try_rewrite_system_call(
                 strip_int_coerce(take_arg(args, "GameMaker.Instance.setOn")),
                 object_names,
             );
-            Some(JsExpr::Call {
-                callee: Box::new(JsExpr::Var("setInstanceFieldIndex".into())),
-                args: vec![obj_id, field, index, val],
-            })
+            Some(rt_call(
+                "setInstanceFieldIndex",
+                vec![obj_id, field, index, val],
+                event_name.is_some(),
+            ))
         }
-        // GameMaker.Instance.getOther(field) → other[field]
+        // GameMaker.Instance.getOther(field) → _rt.other[field]
+        //
+        // `other` is a stateful field on the runtime (set by withInstances), not
+        // a local param — it must be reached through the runtime handle.
         ("GameMaker.Instance", "getOther") if args.len() == 1 => {
             let field = take_arg(args, "GameMaker.Instance.getOther");
             Some(JsExpr::Index {
-                collection: Box::new(JsExpr::Var("other".into())),
+                collection: Box::new(rt_field("other", event_name.is_some())),
                 index: Box::new(field),
             })
         }
-        // GameMaker.Instance.setOther(field, val) → setOtherField(other, field, val)
+        // GameMaker.Instance.setOther(field, val) → _rt.setOtherField(_rt.other, field, val)
         ("GameMaker.Instance", "setOther") if args.len() == 2 => {
             let val = take_arg(args, "GameMaker.Instance.setOther");
             let field = take_arg(args, "GameMaker.Instance.setOther");
-            Some(JsExpr::Call {
-                callee: Box::new(JsExpr::Var("setOtherField".into())),
-                args: vec![JsExpr::Var("other".into()), field, val],
-            })
+            Some(rt_call(
+                "setOtherField",
+                vec![rt_field("other", event_name.is_some()), field, val],
+                event_name.is_some(),
+            ))
         }
-        // GameMaker.Instance.getAll(field) → getAllField(field)
+        // GameMaker.Instance.getAll(field) → _rt.getAllField(field)
         ("GameMaker.Instance", "getAll") if args.len() == 1 => {
             let field = take_arg(args, "GameMaker.Instance.getAll");
-            Some(JsExpr::Call {
-                callee: Box::new(JsExpr::Var("getAllField".into())),
-                args: vec![field],
-            })
+            Some(rt_call("getAllField", vec![field], event_name.is_some()))
         }
-        // GameMaker.Instance.setAll(field, val) → setAllField(field, val)
+        // GameMaker.Instance.setAll(field, val) → _rt.setAllField(field, val)
         ("GameMaker.Instance", "setAll") if args.len() == 2 => {
             let val = take_arg(args, "GameMaker.Instance.setAll");
             let field = take_arg(args, "GameMaker.Instance.setAll");
-            Some(JsExpr::Call {
-                callee: Box::new(JsExpr::Var("setAllField".into())),
-                args: vec![field, val],
-            })
+            Some(rt_call(
+                "setAllField",
+                vec![field, val],
+                event_name.is_some(),
+            ))
         }
         // GameMaker.Instance.getField(target, field)
         //   If target is a const int (object index), resolve to ObjName.instances[0]!.field
@@ -1840,28 +1842,31 @@ fn try_rewrite_system_call(
                             })
                         }
                     } else {
-                        Some(JsExpr::Call {
-                            callee: Box::new(JsExpr::Var("getInstanceField".into())),
-                            args: vec![target, field],
-                        })
+                        Some(rt_call(
+                            "getInstanceField",
+                            vec![target, field],
+                            event_name.is_some(),
+                        ))
                     }
                 } else {
                     // Negative object index (e.g. -4 for noone) — game author bug
                     // but faithfully translate via runtime lookup.
-                    Some(JsExpr::Call {
-                        callee: Box::new(JsExpr::Var("getInstanceField".into())),
-                        args: vec![target, field],
-                    })
+                    Some(rt_call(
+                        "getInstanceField",
+                        vec![target, field],
+                        event_name.is_some(),
+                    ))
                 }
             } else {
                 // Non-constant target (dynamic instance reference) — use runtime lookup.
-                Some(JsExpr::Call {
-                    callee: Box::new(JsExpr::Var("getInstanceField".into())),
-                    args: vec![target, field],
-                })
+                Some(rt_call(
+                    "getInstanceField",
+                    vec![target, field],
+                    event_name.is_some(),
+                ))
             }
         }
-        // GameMaker.Instance.setField(target, field, val) → setInstanceField(target, field, val)
+        // GameMaker.Instance.setField(target, field, val) → _rt.setInstanceField(target, field, val)
         ("GameMaker.Instance", "setField") if args.len() == 3 => {
             let val = take_arg(args, "GameMaker.Instance.setField");
             let field = take_arg(args, "GameMaker.Instance.setField");
@@ -1869,10 +1874,11 @@ fn try_rewrite_system_call(
                 strip_int_coerce(take_arg(args, "GameMaker.Instance.setField")),
                 object_names,
             );
-            Some(JsExpr::Call {
-                callee: Box::new(JsExpr::Var("setInstanceField".into())),
-                args: vec![target, field, val],
-            })
+            Some(rt_call(
+                "setInstanceField",
+                vec![target, field, val],
+                event_name.is_some(),
+            ))
         }
         _ => None,
     }
@@ -2466,15 +2472,18 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_introduced_calls_maps_with_instances() {
+    fn rewrite_introduced_calls_never_introduces_bare_names() {
+        // GameMaker.Instance/Global syscalls now rewrite to rt-qualified member
+        // calls (`_rt.withInstances(...)`), so no bare free-function identifiers
+        // are introduced and nothing needs importing.
         assert_eq!(
             rewrite_introduced_calls("GameMaker.Instance", "withInstances"),
-            &["withInstances"]
+            &[] as &[&str]
         );
-    }
-
-    #[test]
-    fn rewrite_introduced_calls_unknown_returns_empty() {
+        assert_eq!(
+            rewrite_introduced_calls("GameMaker.Instance", "getOn"),
+            &[] as &[&str]
+        );
         assert_eq!(
             rewrite_introduced_calls("GameMaker.Instance", "withEnd"),
             &[] as &[&str]
