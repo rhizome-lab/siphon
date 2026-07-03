@@ -4429,6 +4429,31 @@ All items verified empirically or by direct code reading. Ordered by severity.
      Flash's 9,968 LOC and Twine's 8,580 LOC handwritten TS use it zero times) — a second
      backend currently implies rewriting ~everything by hand, the exact M×N the design
      (CLAUDE.md, Hard Constraints) forbids.
+
+     **Corrected reading of the 3.5% / zero-usage figures (git-dated, 2026-07-03):** Flash's
+     runtime was written Feb 10–Mar 15 2026 and Twine's Feb 15–Mar 18 2026, both frozen since;
+     the IR-bodies mechanism first existed Mar 29 (`b76028c3`, raw FunctionBuilder) and
+     `attach_runtime_body` only landed May 23 (`e234d739`). So zero Flash/Twine usage is NOT a
+     rejection of the design — the runtimes predate the mechanism, no migration was ever
+     attempted (already tracked as blocked, separate scope), and the deeper blocker is that
+     runtime bodies flow through the same inference/lowering/emit pipeline as game code, which
+     is not yet capable of carrying runtime-grade code faithfully (see this same audit: item 1's
+     non-compiling dispatch emission, the RC0006 backlog, item 4's union destruction). The 40
+     functions that DID get bodied are the pure-logic slice the pipeline can already express —
+     adoption tracks the capability boundary, not designer intent.
+
+     **Sequencing decision (2026-07-03):** M+N is neither dropped nor defended — it is
+     SEQUENCED BEHIND pipeline soundness. Unblock criterion: the pipeline can express and
+     faithfully emit a representative slice of the GML runtime (state-touching + dispatch-
+     touching functions, not just pure logic). Once that gate passes, evaluate the authoring
+     format empirically: hand-authored IR bodies (`attach_runtime_body`) vs self-hosting
+     (author runtimes in TS and translate them with Reincarnate itself via a TS-subset
+     frontend — currently forbidden by the CLAUDE.md runtime-bodies constraint; that
+     prohibition's rationale (IR churn) should be re-examined at gate time, not now). Until the
+     gate passes, new-backend planning must assume per-pair handwritten runtimes (lazy
+     materialization: only demanded (engine, backend) pairs, not the full matrix) — and the
+     platform interface is the load-bearing portability boundary under EVERY branch of this
+     decision, which raises the priority of item 7's codify-and-enforce fix.
    - `TypeDecl::Object.parent: Option<TypeId>` (single parent) cannot represent AS3
      interfaces — neutrality is currently bought by discarding source info (Law 2/4). Honest
      form is multi-parent; join/LCA (item 9's `4de16db9`) must generalize to a
