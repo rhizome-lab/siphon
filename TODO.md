@@ -4,6 +4,51 @@ Completed items archived in [COMPLETED.md](COMPLETED.md).
 
 Per-engine roadmaps (gaps, runtime coverage, open work) live in [`docs/targets/`](docs/targets/). This file tracks in-flight and near-term work across all active engines.
 
+## Flash `add_any`: object-operand ToPrimitive ordering (Law 3 edge) (2026-07-03)
+
+The Flash `add_any` dispatch body (`reincarnate-frontend-flash/src/runtime_bodies.rs`)
+branches on `TypeCheck(operand, String)` against the *original* operands. ECMAScript/AVM2
+`+` applies ToPrimitive to both operands first and branches on the *primitives'* types.
+For all primitive operands (Number, int, uint, String, Boolean, null, undefined) the two
+are equivalent and the dispatch is spec-exact. For an **object** operand whose ToPrimitive
+yields a String (e.g. `[1] + 1` → `"11"` in ES; Date), the dispatch takes the numeric arm
+(`Number(obj)`) instead of concatenating. Expressing the spec ordering in IR requires a
+ToPrimitive backend primitive (`to_primitive(Value) -> Value`, runtime valueOf/toString
+reflection — a legitimate backend primitive per the invariants); the dispatch would then
+be `p = to_primitive(x)` + `TypeCheck(p, String)`. Blocked on deciding to add that
+primitive to every backend. Do not approximate at the dispatch level and do not
+special-case in core.
+
+## Structurizer silently mis-emits shared forward true-targets (2026-07-03)
+
+Reproducer (since removed): the first Flash `add_any` dispatch body used one shared
+`concat_block` as the *true* target of two `br_if`s (entry and check_b). The TS output
+dropped the second edge into the `throw new Error("unreachable")` fallback and emitted the
+remaining condition as `if (!typeof v1 === "string")` — a JS precedence bug (`(!typeof v1)
+=== "string"` is always false), so `add_any(1, 2)` would have thrown at runtime. Two
+defects: (1) a multi-predecessor forward true-target is valid CFG but is silently
+mis-structurized — should either duplicate, merge correctly, or fail loudly; (2) negated
+conditions print without parentheses around binary comparisons. GML's `_any` dispatch
+bodies never trip this because they only share the *false*/fallthrough target; the Flash
+body now follows the same single-predecessor discipline (duplicated concat arm). Fix the
+structurizer/printer so the discipline is unnecessary.
+
+## Flash `add_any`: Int/UInt operand pairs stay runtime dispatch (emit quality) (2026-07-03)
+
+`BuiltinOverloadSelect` requires an exact arg-type match against `specializations` and
+cannot insert coercions. AVM2 `add` on two ints produces a Number (no i32 wrapping), so
+the correct specialization for `(Int(32), Int(32))` is `add_f64` *with Int→Float coercions
+on the args* — not expressible in the pass today. Such call sites keep the inlined runtime
+dispatch. Fix is a pass extension (specialization entries that carry coercion types), not
+a semantic change.
+
+## Flash `IncrementI`/`DecrementI`/`IncLocalI`/`DecLocalI`: i64 literal into `add_i32` (pre-existing) (2026-07-03)
+
+`translate.rs` emits `one = const_int(1, 64)` (Int(64)) and passes it as the second arg of
+`add_i32`/`sub_i32` (params Int(32), suffix derived from the first operand). Pre-existing
+arg-type mismatch, discovered while fixing the `add_any` panic; not touched by that fix.
+The literal should be `Int(32)`.
+
 ## setInstanceField argument-order reversal (Law 3, behavioral) (2026-07-03)
 
 Unmasked by the TS2304 fix: some GML pattern (likely compound assignment) emits

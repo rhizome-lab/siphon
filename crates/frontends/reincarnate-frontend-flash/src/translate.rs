@@ -8,7 +8,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use reincarnate_core::ir::{
-    BlockId, CmpKind, Constant, Function, FunctionBuilder, FunctionSig, Type, ValueId, Visibility,
+    BlockId, CmpKind, Constant, FuncId, Function, FunctionBuilder, FunctionSig, Type, ValueId,
+    Visibility,
 };
 use swf::avm2::types::{AbcFile, MethodBody, MethodFlags, Op, TraitKind};
 
@@ -23,6 +24,11 @@ use crate::multiname::{
 use crate::scope::ScopeStack;
 
 /// Translate a single method body into an IR function.
+///
+/// `registry` is the module's runtime registry snapshot (taken after
+/// `runtime_bodies::register_runtime_bodies`) so `call_named` can resolve
+/// Flash-specific polymorphic builtins such as `add_any`.
+#[allow(clippy::too_many_arguments)]
 pub fn translate_method_body(
     abc: &AbcFile,
     body: &MethodBody,
@@ -30,6 +36,7 @@ pub fn translate_method_body(
     sig: FunctionSig,
     param_names: &[Option<String>],
     has_self: bool,
+    registry: &HashMap<String, FuncId>,
     inner_functions: &mut Vec<Function>,
 ) -> Result<Function, String> {
     let ops = parse_bytecode(&body.code)?;
@@ -45,6 +52,7 @@ pub fn translate_method_body(
 
     // Pass 2: Create IR blocks.
     let mut fb = FunctionBuilder::new(func_name, sig.clone(), Visibility::Public);
+    fb.set_registry(registry.clone());
 
     // Map from op index → BlockId.
     let mut block_map: HashMap<usize, BlockId> = HashMap::new();
@@ -681,8 +689,16 @@ fn translate_op(
         // Arithmetic
         // ====================================================================
         Op::Add => {
+            // AVM2 `add` is the ECMAScript `+` operator: string concatenation
+            // when either operand is a String, numeric addition otherwise.
+            // Operand types are not carried on the opcode, so emit the
+            // polymorphic `add_any` builtin (registered by
+            // `runtime_bodies::register_runtime_bodies`); the core
+            // `BuiltinOverloadSelect` pass rewrites call sites whose operand
+            // types inference resolves to the typed variants
+            // (`add_f64` / `concat_str`).
             if let (Some(b), Some(a)) = (stack.pop(), stack.pop()) {
-                let v = fb.add(a, b);
+                let v = fb.call_named("add_any", &[a, b], Type::Value);
                 stack.push(v);
             }
         }
@@ -695,7 +711,12 @@ fn translate_op(
             }
         }
         Op::Subtract => {
+            // AVM2 `subtract` applies ToNumber to both operands (same
+            // `coerce` the translator emits for `convert_d`), so the typed
+            // f64 builtin is correct regardless of the incoming types.
             if let (Some(b), Some(a)) = (stack.pop(), stack.pop()) {
+                let a = fb.coerce(a, Type::Float(64));
+                let b = fb.coerce(b, Type::Float(64));
                 let v = fb.sub(a, b);
                 stack.push(v);
             }
@@ -710,6 +731,8 @@ fn translate_op(
         }
         Op::Multiply => {
             if let (Some(b), Some(a)) = (stack.pop(), stack.pop()) {
+                let a = fb.coerce(a, Type::Float(64));
+                let b = fb.coerce(b, Type::Float(64));
                 let v = fb.mul(a, b);
                 stack.push(v);
             }
@@ -724,18 +747,23 @@ fn translate_op(
         }
         Op::Divide => {
             if let (Some(b), Some(a)) = (stack.pop(), stack.pop()) {
+                let a = fb.coerce(a, Type::Float(64));
+                let b = fb.coerce(b, Type::Float(64));
                 let v = fb.div(a, b);
                 stack.push(v);
             }
         }
         Op::Modulo => {
             if let (Some(b), Some(a)) = (stack.pop(), stack.pop()) {
+                let a = fb.coerce(a, Type::Float(64));
+                let b = fb.coerce(b, Type::Float(64));
                 let v = fb.rem(a, b);
                 stack.push(v);
             }
         }
         Op::Negate => {
             if let Some(a) = stack.pop() {
+                let a = fb.coerce(a, Type::Float(64));
                 let v = fb.neg(a);
                 stack.push(v);
             }
@@ -749,6 +777,7 @@ fn translate_op(
         }
         Op::Increment => {
             if let Some(a) = stack.pop() {
+                let a = fb.coerce(a, Type::Float(64));
                 let one = fb.const_float(1.0);
                 let v = fb.add(a, one);
                 stack.push(v);
@@ -764,6 +793,7 @@ fn translate_op(
         }
         Op::Decrement => {
             if let Some(a) = stack.pop() {
+                let a = fb.coerce(a, Type::Float(64));
                 let one = fb.const_float(1.0);
                 let v = fb.sub(a, one);
                 stack.push(v);
@@ -782,6 +812,7 @@ fn translate_op(
             if idx < locals.len() {
                 let ty = fb.fresh_var();
                 let val = fb.load(locals[idx], ty);
+                let val = fb.coerce(val, Type::Float(64));
                 let one = fb.const_float(1.0);
                 let inc = fb.add(val, one);
                 fb.store(locals[idx], inc);
@@ -803,6 +834,7 @@ fn translate_op(
             if idx < locals.len() {
                 let ty = fb.fresh_var();
                 let val = fb.load(locals[idx], ty);
+                let val = fb.coerce(val, Type::Float(64));
                 let one = fb.const_float(1.0);
                 let dec = fb.sub(val, one);
                 fb.store(locals[idx], dec);
@@ -1499,6 +1531,7 @@ fn translate_op(
                         closure_sig,
                         &closure_param_names,
                         true,
+                        fb.registry(),
                         inner_functions,
                     ) {
                         Ok(func) => {
@@ -2119,6 +2152,7 @@ fn emit_comparison_branch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reincarnate_core::entity::EntityRef;
     use swf::avm2::types::*;
 
     fn empty_pool() -> ConstantPool {
@@ -2131,6 +2165,14 @@ mod tests {
             namespace_sets: vec![],
             multinames: vec![],
         }
+    }
+
+    /// Runtime registry including the Flash polymorphic builtins (`add_any`),
+    /// matching what `translate_abc_to_module` installs before translation.
+    fn test_registry() -> HashMap<String, FuncId> {
+        let mut module = reincarnate_core::ir::Module::new("test".to_string());
+        crate::runtime_bodies::register_runtime_bodies(&mut module);
+        module.runtime_registry
     }
 
     fn make_abc(pool: ConstantPool, bodies: Vec<MethodBody>, methods: Vec<Method>) -> AbcFile {
@@ -2176,8 +2218,17 @@ mod tests {
             ..Default::default()
         };
 
-        let func =
-            translate_method_body(&abc, &body, "test", sig, &[], false, &mut vec![]).unwrap();
+        let func = translate_method_body(
+            &abc,
+            &body,
+            "test",
+            sig,
+            &[],
+            false,
+            &test_registry(),
+            &mut vec![],
+        )
+        .unwrap();
         let output = format!("{func}");
         assert!(output.contains("return"), "expected return in:\n{output}");
     }
@@ -2211,8 +2262,17 @@ mod tests {
             ..Default::default()
         };
 
-        let func =
-            translate_method_body(&abc, &body, "answer", sig, &[], false, &mut vec![]).unwrap();
+        let func = translate_method_body(
+            &abc,
+            &body,
+            "answer",
+            sig,
+            &[],
+            false,
+            &test_registry(),
+            &mut vec![],
+        )
+        .unwrap();
         let output = format!("{func}");
         assert!(
             output.contains("const 42"),
@@ -2250,12 +2310,28 @@ mod tests {
             ..Default::default()
         };
 
-        let func =
-            translate_method_body(&abc, &body, "add_test", sig, &[], false, &mut vec![]).unwrap();
+        let registry = test_registry();
+        let add_any = registry["add_any"];
+        let func = translate_method_body(
+            &abc,
+            &body,
+            "add_test",
+            sig,
+            &[],
+            false,
+            &registry,
+            &mut vec![],
+        )
+        .unwrap();
         let output = format!("{func}");
         assert!(output.contains("const 3"), "expected const 3 in:\n{output}");
         assert!(output.contains("const 4"), "expected const 4 in:\n{output}");
-        assert!(output.contains("add "), "expected add in:\n{output}");
+        // AVM2 `add` is polymorphic (ECMAScript `+`) — translated as a call
+        // to the `add_any` dispatch builtin, specialized after inference.
+        assert!(
+            output.contains(&format!("call func{}(", add_any.index())),
+            "expected add_any call in:\n{output}"
+        );
     }
 
     #[test]
@@ -2288,8 +2364,17 @@ mod tests {
             ..Default::default()
         };
 
-        let func =
-            translate_method_body(&abc, &body, "local_test", sig, &[], false, &mut vec![]).unwrap();
+        let func = translate_method_body(
+            &abc,
+            &body,
+            "local_test",
+            sig,
+            &[],
+            false,
+            &test_registry(),
+            &mut vec![],
+        )
+        .unwrap();
         let output = format!("{func}");
         assert!(output.contains("store"), "expected store in:\n{output}");
         assert!(output.contains("load"), "expected load in:\n{output}");
@@ -2356,8 +2441,17 @@ mod tests {
             ..Default::default()
         };
 
-        let func = translate_method_body(&abc, &body, "branch_test", sig, &[], false, &mut vec![])
-            .unwrap();
+        let func = translate_method_body(
+            &abc,
+            &body,
+            "branch_test",
+            sig,
+            &[],
+            false,
+            &test_registry(),
+            &mut vec![],
+        )
+        .unwrap();
         let output = format!("{func}");
         assert!(output.contains("br_if"), "expected br_if in:\n{output}");
         assert!(
@@ -2387,8 +2481,17 @@ mod tests {
             ..Default::default()
         };
 
-        let func = translate_method_body(&abc, &body, "iftrue_test", sig, &[], false, &mut vec![])
-            .unwrap();
+        let func = translate_method_body(
+            &abc,
+            &body,
+            "iftrue_test",
+            sig,
+            &[],
+            false,
+            &test_registry(),
+            &mut vec![],
+        )
+        .unwrap();
         let output = format!("{func}");
         assert!(output.contains("br_if"), "expected br_if in:\n{output}");
         assert!(
@@ -2415,8 +2518,17 @@ mod tests {
             ..Default::default()
         };
 
-        let func =
-            translate_method_body(&abc, &body, "prop_test", sig, &[], false, &mut vec![]).unwrap();
+        let func = translate_method_body(
+            &abc,
+            &body,
+            "prop_test",
+            sig,
+            &[],
+            false,
+            &test_registry(),
+            &mut vec![],
+        )
+        .unwrap();
         let output = format!("{func}");
         assert!(
             output.contains("set_field"),
@@ -2448,8 +2560,17 @@ mod tests {
             ..Default::default()
         };
 
-        let func =
-            translate_method_body(&abc, &body, "call_test", sig, &[], false, &mut vec![]).unwrap();
+        let func = translate_method_body(
+            &abc,
+            &body,
+            "call_test",
+            sig,
+            &[],
+            false,
+            &test_registry(),
+            &mut vec![],
+        )
+        .unwrap();
         let output = format!("{func}");
         assert!(
             output.contains("call_method"),
@@ -2477,8 +2598,17 @@ mod tests {
             ..Default::default()
         };
 
-        let func =
-            translate_method_body(&abc, &body, "array_test", sig, &[], false, &mut vec![]).unwrap();
+        let func = translate_method_body(
+            &abc,
+            &body,
+            "array_test",
+            sig,
+            &[],
+            false,
+            &test_registry(),
+            &mut vec![],
+        )
+        .unwrap();
         let output = format!("{func}");
         assert!(
             output.contains("array_init"),
@@ -2506,8 +2636,17 @@ mod tests {
             ..Default::default()
         };
 
-        let func =
-            translate_method_body(&abc, &body, "obj_test", sig, &[], false, &mut vec![]).unwrap();
+        let func = translate_method_body(
+            &abc,
+            &body,
+            "obj_test",
+            sig,
+            &[],
+            false,
+            &test_registry(),
+            &mut vec![],
+        )
+        .unwrap();
         let output = format!("{func}");
         assert!(
             output.contains("syscall \"Flash.Object\".\"newObject\""),
@@ -2548,6 +2687,7 @@ mod tests {
             sig.clone(),
             &[],
             false,
+            &test_registry(),
             &mut vec![],
         )
         .unwrap();
@@ -2565,6 +2705,7 @@ mod tests {
             sig,
             &[],
             false,
+            &test_registry(),
             &mut vec![],
         )
         .unwrap();
@@ -2590,8 +2731,17 @@ mod tests {
             ..Default::default()
         };
 
-        let func =
-            translate_method_body(&abc, &body, "str_test", sig, &[], false, &mut vec![]).unwrap();
+        let func = translate_method_body(
+            &abc,
+            &body,
+            "str_test",
+            sig,
+            &[],
+            false,
+            &test_registry(),
+            &mut vec![],
+        )
+        .unwrap();
         let output = format!("{func}");
         assert!(
             output.contains("\"hello\""),
@@ -2615,8 +2765,17 @@ mod tests {
             ..Default::default()
         };
 
-        let func = translate_method_body(&abc, &body, "double_test", sig, &[], false, &mut vec![])
-            .unwrap();
+        let func = translate_method_body(
+            &abc,
+            &body,
+            "double_test",
+            sig,
+            &[],
+            false,
+            &test_registry(),
+            &mut vec![],
+        )
+        .unwrap();
         let output = format!("{func}");
         assert!(output.contains("2.75"), "expected const 2.75 in:\n{output}");
     }
@@ -2639,12 +2798,26 @@ mod tests {
             ..Default::default()
         };
 
-        let func =
-            translate_method_body(&abc, &body, "dup_swap_test", sig, &[], false, &mut vec![])
-                .unwrap();
+        let registry = test_registry();
+        let add_any = registry["add_any"];
+        let func = translate_method_body(
+            &abc,
+            &body,
+            "dup_swap_test",
+            sig,
+            &[],
+            false,
+            &registry,
+            &mut vec![],
+        )
+        .unwrap();
         let output = format!("{func}");
-        // Dup reuses the same ValueId, so `add v1, v1` (not via copy).
-        assert!(output.contains("add "), "expected add in:\n{output}");
+        // Dup reuses the same ValueId, so add_any(v1, v1) (not via copy).
+        // AVM2 `add` is polymorphic — translated as a call to `add_any`.
+        assert!(
+            output.contains(&format!("call func{}(v1, v1)", add_any.index())),
+            "expected add_any call in:\n{output}"
+        );
         assert!(output.contains("sub "), "expected sub in:\n{output}");
     }
 }

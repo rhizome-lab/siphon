@@ -1284,6 +1284,52 @@ impl Module {
         id
     }
 
+    /// Attach an IR body to a runtime stub previously created by
+    /// [`register_runtime`].
+    ///
+    /// Builds a full `Function` with a [`FunctionBuilder`] pre-loaded with this
+    /// module's runtime registry (so `call_named` and the arithmetic helpers
+    /// resolve), calls `build` to populate it, then copies the resulting
+    /// `blocks`, `insts`, `value_types`, and `entry` into the stub in-place and
+    /// sets `inline_hint = InlineHint::Always`.  The stub's `name`, `sig`,
+    /// `visibility`, and registry entry are left untouched.
+    ///
+    /// This is the required mechanism for frontend runtime-library bodies:
+    /// each frontend defines its runtime library in IR once and every backend
+    /// emits it, avoiding M×N reimplementations.
+    ///
+    /// [`register_runtime`]: Module::register_runtime
+    /// [`FunctionBuilder`]: super::builder::FunctionBuilder
+    ///
+    /// # Panics
+    /// Panics if `name` is not in the runtime registry — this is a programming
+    /// error (the stub must be registered before its body is attached).
+    pub fn attach_runtime_body<F>(&mut self, name: &str, params: &[Type], return_ty: Type, build: F)
+    where
+        F: FnOnce(&mut super::builder::FunctionBuilder),
+    {
+        let fid = self
+            .lookup_runtime(name)
+            .unwrap_or_else(|| panic!("attach_runtime_body: '{name}' not in runtime registry"));
+        let sig = FunctionSig {
+            params: params.to_vec(),
+            return_ty,
+            defaults: vec![],
+            has_rest_param: false,
+            param_lower_bounds: vec![],
+        };
+        let mut b = super::builder::FunctionBuilder::new(name, sig, Visibility::Public);
+        b.set_registry(self.runtime_registry.clone());
+        build(&mut b);
+        let built = b.build();
+        let stub = &mut self.functions[fid];
+        stub.blocks = built.blocks;
+        stub.insts = built.insts;
+        stub.value_types = built.value_types;
+        stub.entry = built.entry;
+        stub.inline_hint = InlineHint::Always;
+    }
+
     /// Register an alias name for an already-registered runtime function.
     ///
     /// Inserts `alias → fid` into the runtime registry without creating a new

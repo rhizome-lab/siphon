@@ -1,7 +1,7 @@
 use std::f64::consts::PI;
 
 use reincarnate_core::ir::builder::FunctionBuilder;
-use reincarnate_core::ir::func::{InlineHint, Visibility};
+use reincarnate_core::ir::func::Visibility;
 use reincarnate_core::ir::inst::CmpKind;
 use reincarnate_core::ir::module::{FieldDef, Module, TypeDecl};
 use reincarnate_core::ir::ty::{FunctionSig, Type, TypeId};
@@ -259,55 +259,13 @@ fn make_builder(module: &Module, name: &str, sig: FunctionSig) -> FunctionBuilde
     b
 }
 
-/// Look up `name` in the runtime registry (panicking if not found), build a
-/// `FunctionBuilder` with the given signature, call `build` to populate it,
-/// then copy the resulting `blocks`, `insts`, `value_types`, and `entry` into
-/// the stub in-place and set `inline_hint = InlineHint::Always`.
-///
-/// The stub's `name`, `sig`, `visibility`, and registry entry are left
-/// untouched.
-///
-/// # Panics
-/// Panics if `name` is not in the runtime registry — this is a programming
-/// error (the stub must be registered before its body is attached).
-fn attach_runtime_body<F>(
-    module: &mut Module,
-    name: &str,
-    params: &[Type],
-    return_ty: Type,
-    build: F,
-) where
-    F: FnOnce(&mut FunctionBuilder),
-{
-    let fid = module
-        .lookup_runtime(name)
-        .unwrap_or_else(|| panic!("attach_runtime_body: '{name}' not in runtime registry"));
-    let sig = FunctionSig {
-        params: params.to_vec(),
-        return_ty,
-        defaults: vec![],
-        has_rest_param: false,
-        param_lower_bounds: vec![],
-    };
-    let mut b = make_builder(module, name, sig);
-    build(&mut b);
-    let built = b.build();
-    let stub = &mut module.functions[fid];
-    stub.blocks = built.blocks;
-    stub.insts = built.insts;
-    stub.value_types = built.value_types;
-    stub.entry = built.entry;
-    stub.inline_hint = InlineHint::Always;
-}
-
 // ---------------------------------------------------------------------------
 // point_in_rectangle(px, py, x1, y1, x2, y2: f64) -> Bool
 //   =  px >= x1 && px <= x2 && py >= y1 && py <= y2
 // ---------------------------------------------------------------------------
 
 fn attach_body_point_in_rectangle(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "point_in_rectangle",
         &[
             Type::Float(64),
@@ -344,8 +302,7 @@ fn attach_body_point_in_rectangle(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_point_in_circle(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "point_in_circle",
         &[
             Type::Float(64),
@@ -379,8 +336,7 @@ fn attach_body_point_in_circle(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_lengthdir_x(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "lengthdir_x",
         &[Type::Float(64), Type::Float(64)],
         Type::Float(64),
@@ -407,8 +363,7 @@ fn attach_body_lengthdir_x(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_lengthdir_y(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "lengthdir_y",
         &[Type::Float(64), Type::Float(64)],
         Type::Float(64),
@@ -431,8 +386,7 @@ fn attach_body_lengthdir_y(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_point_distance(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "point_distance",
         &[
             Type::Float(64),
@@ -461,8 +415,7 @@ fn attach_body_point_distance(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_point_distance_3d(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "point_distance_3d",
         &[
             Type::Float(64),
@@ -500,18 +453,12 @@ fn attach_body_point_distance_3d(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_degtorad(module: &mut Module) {
-    attach_runtime_body(
-        module,
-        "degtorad",
-        &[Type::Float(64)],
-        Type::Float(64),
-        |b| {
-            let x = b.param(0);
-            let factor = b.const_float(PI / 180.0);
-            let result = b.mul(x, factor);
-            b.ret(Some(result));
-        },
-    );
+    module.attach_runtime_body("degtorad", &[Type::Float(64)], Type::Float(64), |b| {
+        let x = b.param(0);
+        let factor = b.const_float(PI / 180.0);
+        let result = b.mul(x, factor);
+        b.ret(Some(result));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -519,18 +466,12 @@ fn attach_body_degtorad(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_radtodeg(module: &mut Module) {
-    attach_runtime_body(
-        module,
-        "radtodeg",
-        &[Type::Float(64)],
-        Type::Float(64),
-        |b| {
-            let x = b.param(0);
-            let factor = b.const_float(180.0 / PI);
-            let result = b.mul(x, factor);
-            b.ret(Some(result));
-        },
-    );
+    module.attach_runtime_body("radtodeg", &[Type::Float(64)], Type::Float(64), |b| {
+        let x = b.param(0);
+        let factor = b.const_float(180.0 / PI);
+        let result = b.mul(x, factor);
+        b.ret(Some(result));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -538,7 +479,7 @@ fn attach_body_radtodeg(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_dsin(module: &mut Module) {
-    attach_runtime_body(module, "dsin", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("dsin", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let factor = b.const_float(PI / 180.0);
         let rad = b.mul(x, factor);
@@ -552,7 +493,7 @@ fn attach_body_dsin(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_dcos(module: &mut Module) {
-    attach_runtime_body(module, "dcos", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("dcos", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let factor = b.const_float(PI / 180.0);
         let rad = b.mul(x, factor);
@@ -566,7 +507,7 @@ fn attach_body_dcos(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_dtan(module: &mut Module) {
-    attach_runtime_body(module, "dtan", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("dtan", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let factor = b.const_float(PI / 180.0);
         let rad = b.mul(x, factor);
@@ -580,19 +521,13 @@ fn attach_body_dtan(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_darcsin(module: &mut Module) {
-    attach_runtime_body(
-        module,
-        "darcsin",
-        &[Type::Float(64)],
-        Type::Float(64),
-        |b| {
-            let x = b.param(0);
-            let asin_val = b.call_named("asin_f64", &[x], Type::Float(64));
-            let factor = b.const_float(180.0 / PI);
-            let result = b.mul(asin_val, factor);
-            b.ret(Some(result));
-        },
-    );
+    module.attach_runtime_body("darcsin", &[Type::Float(64)], Type::Float(64), |b| {
+        let x = b.param(0);
+        let asin_val = b.call_named("asin_f64", &[x], Type::Float(64));
+        let factor = b.const_float(180.0 / PI);
+        let result = b.mul(asin_val, factor);
+        b.ret(Some(result));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -600,19 +535,13 @@ fn attach_body_darcsin(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_darccos(module: &mut Module) {
-    attach_runtime_body(
-        module,
-        "darccos",
-        &[Type::Float(64)],
-        Type::Float(64),
-        |b| {
-            let x = b.param(0);
-            let acos_val = b.call_named("acos_f64", &[x], Type::Float(64));
-            let factor = b.const_float(180.0 / PI);
-            let result = b.mul(acos_val, factor);
-            b.ret(Some(result));
-        },
-    );
+    module.attach_runtime_body("darccos", &[Type::Float(64)], Type::Float(64), |b| {
+        let x = b.param(0);
+        let acos_val = b.call_named("acos_f64", &[x], Type::Float(64));
+        let factor = b.const_float(180.0 / PI);
+        let result = b.mul(acos_val, factor);
+        b.ret(Some(result));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -620,19 +549,13 @@ fn attach_body_darccos(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_darctan(module: &mut Module) {
-    attach_runtime_body(
-        module,
-        "darctan",
-        &[Type::Float(64)],
-        Type::Float(64),
-        |b| {
-            let x = b.param(0);
-            let atan_val = b.call_named("atan_f64", &[x], Type::Float(64));
-            let factor = b.const_float(180.0 / PI);
-            let result = b.mul(atan_val, factor);
-            b.ret(Some(result));
-        },
-    );
+    module.attach_runtime_body("darctan", &[Type::Float(64)], Type::Float(64), |b| {
+        let x = b.param(0);
+        let atan_val = b.call_named("atan_f64", &[x], Type::Float(64));
+        let factor = b.const_float(180.0 / PI);
+        let result = b.mul(atan_val, factor);
+        b.ret(Some(result));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -640,8 +563,7 @@ fn attach_body_darctan(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_darctan2(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "darctan2",
         &[Type::Float(64), Type::Float(64)],
         Type::Float(64),
@@ -661,8 +583,7 @@ fn attach_body_darctan2(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_arctan2(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "arctan2",
         &[Type::Float(64), Type::Float(64)],
         Type::Float(64),
@@ -685,8 +606,7 @@ fn attach_body_arctan2(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_point_direction(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "point_direction",
         &[
             Type::Float(64),
@@ -716,7 +636,7 @@ fn attach_body_point_direction(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_sqr(module: &mut Module) {
-    attach_runtime_body(module, "sqr", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("sqr", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.mul(x, x);
         b.ret(Some(result));
@@ -728,8 +648,7 @@ fn attach_body_sqr(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_power(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "power",
         &[Type::Float(64), Type::Float(64)],
         Type::Float(64),
@@ -747,8 +666,7 @@ fn attach_body_power(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_logn(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "logn",
         &[Type::Float(64), Type::Float(64)],
         Type::Float(64),
@@ -768,7 +686,7 @@ fn attach_body_logn(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_log2(module: &mut Module) {
-    attach_runtime_body(module, "log2", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("log2", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("log2_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -780,7 +698,7 @@ fn attach_body_log2(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_log10(module: &mut Module) {
-    attach_runtime_body(module, "log10", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("log10", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("log10_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -792,7 +710,7 @@ fn attach_body_log10(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_exp(module: &mut Module) {
-    attach_runtime_body(module, "exp", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("exp", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("exp_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -804,8 +722,7 @@ fn attach_body_exp(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_clamp(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "clamp",
         &[Type::Float(64), Type::Float(64), Type::Float(64)],
         Type::Float(64),
@@ -825,8 +742,7 @@ fn attach_body_clamp(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_lerp(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "lerp",
         &[Type::Float(64), Type::Float(64), Type::Float(64)],
         Type::Float(64),
@@ -851,7 +767,7 @@ fn attach_body_lerp(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_abs(module: &mut Module) {
-    attach_runtime_body(module, "abs", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("abs", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("abs_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -863,7 +779,7 @@ fn attach_body_abs(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_floor(module: &mut Module) {
-    attach_runtime_body(module, "floor", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("floor", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("floor_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -875,7 +791,7 @@ fn attach_body_floor(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_ceil(module: &mut Module) {
-    attach_runtime_body(module, "ceil", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("ceil", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("ceil_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -890,7 +806,7 @@ fn attach_body_ceil(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_round(module: &mut Module) {
-    attach_runtime_body(module, "round", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("round", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("round_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -902,7 +818,7 @@ fn attach_body_round(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_sign(module: &mut Module) {
-    attach_runtime_body(module, "sign", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("sign", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("sign_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -914,7 +830,7 @@ fn attach_body_sign(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_sqrt(module: &mut Module) {
-    attach_runtime_body(module, "sqrt", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("sqrt", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("sqrt_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -926,7 +842,7 @@ fn attach_body_sqrt(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_arctan(module: &mut Module) {
-    attach_runtime_body(module, "arctan", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("arctan", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("atan_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -941,7 +857,7 @@ fn attach_body_arctan(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_frac(module: &mut Module) {
-    attach_runtime_body(module, "frac", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("frac", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let trunc_val = b.call_named("trunc_f64", &[x], Type::Float(64));
         let result = b.sub(x, trunc_val);
@@ -954,8 +870,7 @@ fn attach_body_frac(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_dot_product(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "dot_product",
         &[
             Type::Float(64),
@@ -983,8 +898,7 @@ fn attach_body_dot_product(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_dot_product_3d(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "dot_product_3d",
         &[
             Type::Float(64),
@@ -1020,18 +934,12 @@ fn attach_body_dot_product_3d(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_color_get_red(module: &mut Module) {
-    attach_runtime_body(
-        module,
-        "color_get_red",
-        &[Type::Float(64)],
-        Type::Float(64),
-        |b| {
-            let color = b.param(0);
-            let mask = b.const_float(255.0);
-            let result = b.bit_and(color, mask);
-            b.ret(Some(result));
-        },
-    );
+    module.attach_runtime_body("color_get_red", &[Type::Float(64)], Type::Float(64), |b| {
+        let color = b.param(0);
+        let mask = b.const_float(255.0);
+        let result = b.bit_and(color, mask);
+        b.ret(Some(result));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1041,8 +949,7 @@ fn attach_body_color_get_red(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_color_get_green(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "color_get_green",
         &[Type::Float(64)],
         Type::Float(64),
@@ -1064,18 +971,12 @@ fn attach_body_color_get_green(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_color_get_blue(module: &mut Module) {
-    attach_runtime_body(
-        module,
-        "color_get_blue",
-        &[Type::Float(64)],
-        Type::Float(64),
-        |b| {
-            let color = b.param(0);
-            let shift = b.const_float(16.0);
-            let result = b.shr(color, shift);
-            b.ret(Some(result));
-        },
-    );
+    module.attach_runtime_body("color_get_blue", &[Type::Float(64)], Type::Float(64), |b| {
+        let color = b.param(0);
+        let shift = b.const_float(16.0);
+        let result = b.shr(color, shift);
+        b.ret(Some(result));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1085,8 +986,7 @@ fn attach_body_color_get_blue(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_make_color_rgb(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "make_color_rgb",
         &[Type::Float(64), Type::Float(64), Type::Float(64)],
         Type::Float(64),
@@ -1118,8 +1018,7 @@ fn attach_body_make_color_rgb(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_merge_color(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "merge_color",
         &[Type::Float(64), Type::Float(64), Type::Float(64)],
         Type::Float(64),
@@ -1172,8 +1071,7 @@ fn attach_body_merge_color(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_color_get_value(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "color_get_value",
         &[Type::Float(64)],
         Type::Float(64),
@@ -1212,8 +1110,7 @@ fn attach_body_color_get_value(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_color_get_saturation(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "color_get_saturation",
         &[Type::Float(64)],
         Type::Float(64),
@@ -1274,106 +1171,100 @@ fn attach_body_color_get_saturation(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_color_get_hue(module: &mut Module) {
-    attach_runtime_body(
-        module,
-        "color_get_hue",
-        &[Type::Float(64)],
-        Type::Float(64),
-        |b| {
-            let color = b.param(0);
+    module.attach_runtime_body("color_get_hue", &[Type::Float(64)], Type::Float(64), |b| {
+        let color = b.param(0);
 
-            let c255 = b.const_float(255.0);
-            let zero = b.const_float(0.0);
+        let c255 = b.const_float(255.0);
+        let zero = b.const_float(0.0);
 
-            // Extract r, g, b as fractions in [0, 1].
-            let r_raw = b.call_named("color_get_red", &[color], Type::Float(64));
-            let g_raw = b.call_named("color_get_green", &[color], Type::Float(64));
-            let bv_raw = b.call_named("color_get_blue", &[color], Type::Float(64));
-            let r = b.div(r_raw, c255);
-            let g = b.div(g_raw, c255);
-            let bv = b.div(bv_raw, c255);
+        // Extract r, g, b as fractions in [0, 1].
+        let r_raw = b.call_named("color_get_red", &[color], Type::Float(64));
+        let g_raw = b.call_named("color_get_green", &[color], Type::Float(64));
+        let bv_raw = b.call_named("color_get_blue", &[color], Type::Float(64));
+        let r = b.div(r_raw, c255);
+        let g = b.div(g_raw, c255);
+        let bv = b.div(bv_raw, c255);
 
-            let max_rg = b.call_named("max_f64", &[r, g], Type::Float(64));
-            let max_rgb = b.call_named("max_f64", &[max_rg, bv], Type::Float(64));
-            let min_rg = b.call_named("min_f64", &[r, g], Type::Float(64));
-            let min_rgb = b.call_named("min_f64", &[min_rg, bv], Type::Float(64));
-            let d = b.sub(max_rgb, min_rgb);
+        let max_rg = b.call_named("max_f64", &[r, g], Type::Float(64));
+        let max_rgb = b.call_named("max_f64", &[max_rg, bv], Type::Float(64));
+        let min_rg = b.call_named("min_f64", &[r, g], Type::Float(64));
+        let min_rgb = b.call_named("min_f64", &[min_rg, bv], Type::Float(64));
+        let d = b.sub(max_rgb, min_rgb);
 
-            // if d <= 0 { return 0 }  (d >= 0 always, so this equals d === 0)
-            let d_le_zero = b.cmp(CmpKind::Le, d, zero);
-            let ret_zero_block = b.create_block();
-            let branch_r_check = b.create_block();
-            b.br_if(d_le_zero, ret_zero_block, &[], branch_r_check, &[]);
+        // if d <= 0 { return 0 }  (d >= 0 always, so this equals d === 0)
+        let d_le_zero = b.cmp(CmpKind::Le, d, zero);
+        let ret_zero_block = b.create_block();
+        let branch_r_check = b.create_block();
+        b.br_if(d_le_zero, ret_zero_block, &[], branch_r_check, &[]);
 
-            b.switch_to_block(ret_zero_block);
-            b.ret(Some(zero));
+        b.switch_to_block(ret_zero_block);
+        b.ret(Some(zero));
 
-            // 3-way branch: is r the maximum channel?
-            b.switch_to_block(branch_r_check);
-            let r_ge_g = b.cmp(CmpKind::Ge, r, g);
-            let r_ge_b = b.cmp(CmpKind::Ge, r, bv);
-            let r_is_max = b.call_named("and_bool", &[r_ge_g, r_ge_b], Type::Bool);
+        // 3-way branch: is r the maximum channel?
+        b.switch_to_block(branch_r_check);
+        let r_ge_g = b.cmp(CmpKind::Ge, r, g);
+        let r_ge_b = b.cmp(CmpKind::Ge, r, bv);
+        let r_is_max = b.call_named("and_bool", &[r_ge_g, r_ge_b], Type::Bool);
 
-            let (merge_block, h_params) = b.create_block_with_params(&[Type::Float(64)]);
-            let block_r = b.create_block();
-            let block_not_r = b.create_block();
-            b.br_if(r_is_max, block_r, &[], block_not_r, &[]);
+        let (merge_block, h_params) = b.create_block_with_params(&[Type::Float(64)]);
+        let block_r = b.create_block();
+        let block_not_r = b.create_block();
+        b.br_if(r_is_max, block_r, &[], block_not_r, &[]);
 
-            // Branch: r is max → h = ((g - b) / d) % 6
-            b.switch_to_block(block_r);
-            let c6 = b.const_float(6.0);
-            let g_minus_b = b.sub(g, bv);
-            let h_r_raw = b.div(g_minus_b, d);
-            let h_r = b.rem(h_r_raw, c6);
-            b.br(merge_block, &[h_r]);
+        // Branch: r is max → h = ((g - b) / d) % 6
+        b.switch_to_block(block_r);
+        let c6 = b.const_float(6.0);
+        let g_minus_b = b.sub(g, bv);
+        let h_r_raw = b.div(g_minus_b, d);
+        let h_r = b.rem(h_r_raw, c6);
+        b.br(merge_block, &[h_r]);
 
-            // Branch: r is not max — is g the max? (check g >= b)
-            b.switch_to_block(block_not_r);
-            let g_ge_b = b.cmp(CmpKind::Ge, g, bv);
-            let block_g = b.create_block();
-            let block_bv = b.create_block();
-            b.br_if(g_ge_b, block_g, &[], block_bv, &[]);
+        // Branch: r is not max — is g the max? (check g >= b)
+        b.switch_to_block(block_not_r);
+        let g_ge_b = b.cmp(CmpKind::Ge, g, bv);
+        let block_g = b.create_block();
+        let block_bv = b.create_block();
+        b.br_if(g_ge_b, block_g, &[], block_bv, &[]);
 
-            // Branch: g is max → h = (b - r) / d + 2
-            b.switch_to_block(block_g);
-            let two = b.const_float(2.0);
-            let bv_minus_r = b.sub(bv, r);
-            let h_g_div = b.div(bv_minus_r, d);
-            let h_g = b.add(h_g_div, two);
-            b.br(merge_block, &[h_g]);
+        // Branch: g is max → h = (b - r) / d + 2
+        b.switch_to_block(block_g);
+        let two = b.const_float(2.0);
+        let bv_minus_r = b.sub(bv, r);
+        let h_g_div = b.div(bv_minus_r, d);
+        let h_g = b.add(h_g_div, two);
+        b.br(merge_block, &[h_g]);
 
-            // Branch: b is max → h = (r - g) / d + 4
-            b.switch_to_block(block_bv);
-            let four = b.const_float(4.0);
-            let r_minus_g = b.sub(r, g);
-            let h_bv_div = b.div(r_minus_g, d);
-            let h_bv = b.add(h_bv_div, four);
-            b.br(merge_block, &[h_bv]);
+        // Branch: b is max → h = (r - g) / d + 4
+        b.switch_to_block(block_bv);
+        let four = b.const_float(4.0);
+        let r_minus_g = b.sub(r, g);
+        let h_bv_div = b.div(r_minus_g, d);
+        let h_bv = b.add(h_bv_div, four);
+        b.br(merge_block, &[h_bv]);
 
-            // Merge: h_raw is the block param from whichever branch.
-            b.switch_to_block(merge_block);
-            let h_raw = h_params[0];
+        // Merge: h_raw is the block param from whichever branch.
+        b.switch_to_block(merge_block);
+        let h_raw = h_params[0];
 
-            // h = round(h_raw * 255 / 6)
-            let c255_over_6 = b.const_float(255.0 / 6.0);
-            let h_scaled = b.mul(h_raw, c255_over_6);
-            let h_rounded = b.call_named("round_f64", &[h_scaled], Type::Float(64));
+        // h = round(h_raw * 255 / 6)
+        let c255_over_6 = b.const_float(255.0 / 6.0);
+        let h_scaled = b.mul(h_raw, c255_over_6);
+        let h_rounded = b.call_named("round_f64", &[h_scaled], Type::Float(64));
 
-            // if h < 0 { h += 255 }
-            let h_lt_zero = b.cmp(CmpKind::Lt, h_rounded, zero);
-            let (final_block, final_params) = b.create_block_with_params(&[Type::Float(64)]);
-            let add_255_block = b.create_block();
-            b.br_if(h_lt_zero, add_255_block, &[], final_block, &[h_rounded]);
+        // if h < 0 { h += 255 }
+        let h_lt_zero = b.cmp(CmpKind::Lt, h_rounded, zero);
+        let (final_block, final_params) = b.create_block_with_params(&[Type::Float(64)]);
+        let add_255_block = b.create_block();
+        b.br_if(h_lt_zero, add_255_block, &[], final_block, &[h_rounded]);
 
-            b.switch_to_block(add_255_block);
-            let h_plus_255 = b.add(h_rounded, c255);
-            b.br(final_block, &[h_plus_255]);
+        b.switch_to_block(add_255_block);
+        let h_plus_255 = b.add(h_rounded, c255);
+        b.br(final_block, &[h_plus_255]);
 
-            b.switch_to_block(final_block);
-            let result = final_params[0];
-            b.ret(Some(result));
-        },
-    );
+        b.switch_to_block(final_block);
+        let result = final_params[0];
+        b.ret(Some(result));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1397,8 +1288,7 @@ fn attach_body_color_get_hue(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_make_color_hsv(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "make_color_hsv",
         &[Type::Float(64), Type::Float(64), Type::Float(64)],
         Type::Float(64),
@@ -1528,17 +1418,11 @@ fn attach_body_make_color_hsv(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_length(module: &mut Module) {
-    attach_runtime_body(
-        module,
-        "string_length",
-        &[Type::String],
-        Type::Float(64),
-        |b| {
-            let s = b.param(0);
-            let result = b.call_named("string_length_str", &[s], Type::Float(64));
-            b.ret(Some(result));
-        },
-    );
+    module.attach_runtime_body("string_length", &[Type::String], Type::Float(64), |b| {
+        let s = b.param(0);
+        let result = b.call_named("string_length_str", &[s], Type::Float(64));
+        b.ret(Some(result));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1546,7 +1430,7 @@ fn attach_body_string_length(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_upper(module: &mut Module) {
-    attach_runtime_body(module, "string_upper", &[Type::String], Type::String, |b| {
+    module.attach_runtime_body("string_upper", &[Type::String], Type::String, |b| {
         let s = b.param(0);
         let result = b.call_named("string_upper_str", &[s], Type::String);
         b.ret(Some(result));
@@ -1558,7 +1442,7 @@ fn attach_body_string_upper(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_lower(module: &mut Module) {
-    attach_runtime_body(module, "string_lower", &[Type::String], Type::String, |b| {
+    module.attach_runtime_body("string_lower", &[Type::String], Type::String, |b| {
         let s = b.param(0);
         let result = b.call_named("string_lower_str", &[s], Type::String);
         b.ret(Some(result));
@@ -1571,8 +1455,7 @@ fn attach_body_string_lower(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_char_at(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_char_at",
         &[Type::String, Type::Float(64)],
         Type::String,
@@ -1594,8 +1477,7 @@ fn attach_body_string_char_at(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_copy(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_copy",
         &[Type::String, Type::Float(64), Type::Float(64)],
         Type::String,
@@ -1621,8 +1503,7 @@ fn attach_body_string_copy(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_pos(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_pos",
         &[Type::String, Type::String],
         Type::Float(64),
@@ -1645,8 +1526,7 @@ fn attach_body_string_pos(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_delete(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_delete",
         &[Type::String, Type::Float(64), Type::Float(64)],
         Type::String,
@@ -1675,8 +1555,7 @@ fn attach_body_string_delete(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_insert(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_insert",
         &[Type::String, Type::String, Type::Float(64)],
         Type::String,
@@ -1706,8 +1585,7 @@ fn attach_body_string_insert(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_replace_all(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_replace_all",
         &[Type::String, Type::String, Type::String],
         Type::String,
@@ -1730,8 +1608,7 @@ fn attach_body_string_replace_all(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_count(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_count",
         &[Type::String, Type::String],
         Type::Float(64),
@@ -1756,8 +1633,7 @@ fn attach_body_string_count(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_ord_at(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_ord_at",
         &[Type::String, Type::Float(64)],
         Type::Float(64),
@@ -1779,8 +1655,7 @@ fn attach_body_string_ord_at(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_repeat(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_repeat",
         &[Type::String, Type::Float(64)],
         Type::String,
@@ -1800,8 +1675,7 @@ fn attach_body_string_repeat(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_replace(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_replace",
         &[Type::String, Type::String, Type::String],
         Type::String,
@@ -1822,8 +1696,7 @@ fn attach_body_string_replace(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_hash_to_newline(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_hash_to_newline",
         &[Type::String],
         Type::String,
@@ -1846,8 +1719,7 @@ fn attach_body_string_hash_to_newline(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_trim(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_trim",
         &[Type::String, Type::Value],
         Type::String,
@@ -1866,8 +1738,7 @@ fn attach_body_string_trim(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_length(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_length",
         &[Type::Array(Box::new(Type::Value))],
         Type::Float(64),
@@ -1886,8 +1757,7 @@ fn attach_body_array_length(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_length_1d(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_length_1d",
         &[Type::Array(Box::new(Type::Value))],
         Type::Float(64),
@@ -1906,8 +1776,7 @@ fn attach_body_array_length_1d(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_contains(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_contains",
         &[Type::Array(Box::new(Type::Value)), Type::Value],
         Type::Bool,
@@ -1926,7 +1795,7 @@ fn attach_body_array_contains(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_sin(module: &mut Module) {
-    attach_runtime_body(module, "sin", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("sin", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("sin_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -1939,7 +1808,7 @@ fn attach_body_sin(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_cos(module: &mut Module) {
-    attach_runtime_body(module, "cos", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("cos", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("cos_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -1952,7 +1821,7 @@ fn attach_body_cos(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_tan(module: &mut Module) {
-    attach_runtime_body(module, "tan", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("tan", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("tan_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -1965,7 +1834,7 @@ fn attach_body_tan(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_arcsin(module: &mut Module) {
-    attach_runtime_body(module, "arcsin", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("arcsin", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("asin_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -1978,7 +1847,7 @@ fn attach_body_arcsin(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_arccos(module: &mut Module) {
-    attach_runtime_body(module, "arccos", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("arccos", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("acos_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -1992,7 +1861,7 @@ fn attach_body_arccos(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_ord(module: &mut Module) {
-    attach_runtime_body(module, "ord", &[Type::String], Type::Float(64), |b| {
+    module.attach_runtime_body("ord", &[Type::String], Type::Float(64), |b| {
         let s = b.param(0);
         let zero = b.const_float(0.0);
         let result = b.call_named("string_char_code_at_str", &[s, zero], Type::Float(64));
@@ -2007,8 +1876,7 @@ fn attach_body_ord(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_byte_at(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_byte_at",
         &[Type::String, Type::Float(64)],
         Type::Float(64),
@@ -2033,17 +1901,11 @@ fn attach_body_string_byte_at(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_digits(module: &mut Module) {
-    attach_runtime_body(
-        module,
-        "string_digits",
-        &[Type::String],
-        Type::String,
-        |b| {
-            let s = b.param(0);
-            let result = b.call_named("string_digits_rt", &[s], Type::String);
-            b.ret(Some(result));
-        },
-    );
+    module.attach_runtime_body("string_digits", &[Type::String], Type::String, |b| {
+        let s = b.param(0);
+        let result = b.call_named("string_digits_rt", &[s], Type::String);
+        b.ret(Some(result));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -2053,17 +1915,11 @@ fn attach_body_string_digits(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_letters(module: &mut Module) {
-    attach_runtime_body(
-        module,
-        "string_letters",
-        &[Type::String],
-        Type::String,
-        |b| {
-            let s = b.param(0);
-            let result = b.call_named("string_letters_rt", &[s], Type::String);
-            b.ret(Some(result));
-        },
-    );
+    module.attach_runtime_body("string_letters", &[Type::String], Type::String, |b| {
+        let s = b.param(0);
+        let result = b.call_named("string_letters_rt", &[s], Type::String);
+        b.ret(Some(result));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -2074,8 +1930,7 @@ fn attach_body_string_letters(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_string_format(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "string_format",
         &[Type::Float(64), Type::Float(64), Type::Float(64)],
         Type::String,
@@ -2096,7 +1951,7 @@ fn attach_body_string_format(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_chr(module: &mut Module) {
-    attach_runtime_body(module, "chr", &[Type::Float(64)], Type::String, |b| {
+    module.attach_runtime_body("chr", &[Type::Float(64)], Type::String, |b| {
         let n = b.param(0);
         let result = b.call_named("chr_f64", &[n], Type::String);
         b.ret(Some(result));
@@ -2108,7 +1963,7 @@ fn attach_body_chr(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_ln(module: &mut Module) {
-    attach_runtime_body(module, "ln", &[Type::Float(64)], Type::Float(64), |b| {
+    module.attach_runtime_body("ln", &[Type::Float(64)], Type::Float(64), |b| {
         let x = b.param(0);
         let result = b.call_named("ln_f64", &[x], Type::Float(64));
         b.ret(Some(result));
@@ -2120,7 +1975,7 @@ fn attach_body_ln(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_math_get_epsilon(module: &mut Module) {
-    attach_runtime_body(module, "math_get_epsilon", &[], Type::Float(64), |b| {
+    module.attach_runtime_body("math_get_epsilon", &[], Type::Float(64), |b| {
         let result = b.const_float(0.00001);
         b.ret(Some(result));
     });
@@ -2133,7 +1988,7 @@ fn attach_body_math_get_epsilon(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_is_nan(module: &mut Module) {
-    attach_runtime_body(module, "is_nan", &[Type::Float(64)], Type::Bool, |b| {
+    module.attach_runtime_body("is_nan", &[Type::Float(64)], Type::Bool, |b| {
         // NaN is the only value not equal to itself: x !== x
         let x = b.param(0);
         let eq = b.cmp(CmpKind::Eq, x, x);
@@ -2149,7 +2004,7 @@ fn attach_body_is_nan(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_is_infinity(module: &mut Module) {
-    attach_runtime_body(module, "is_infinity", &[Type::Float(64)], Type::Bool, |b| {
+    module.attach_runtime_body("is_infinity", &[Type::Float(64)], Type::Bool, |b| {
         let x = b.param(0);
         let pos_inf = b.const_float(f64::INFINITY);
         let neg_inf = b.const_float(f64::NEG_INFINITY);
@@ -2165,7 +2020,7 @@ fn attach_body_is_infinity(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_is_bool(module: &mut Module) {
-    attach_runtime_body(module, "is_bool", &[Type::Value], Type::Bool, |b| {
+    module.attach_runtime_body("is_bool", &[Type::Value], Type::Bool, |b| {
         let x = b.param(0);
         let result = b.type_check(x, Type::Bool);
         b.ret(Some(result));
@@ -2178,7 +2033,7 @@ fn attach_body_is_bool(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_is_real(module: &mut Module) {
-    attach_runtime_body(module, "is_real", &[Type::Value], Type::Bool, |b| {
+    module.attach_runtime_body("is_real", &[Type::Value], Type::Bool, |b| {
         let x = b.param(0);
         let result = b.type_check(x, Type::Float(64));
         b.ret(Some(result));
@@ -2191,7 +2046,7 @@ fn attach_body_is_real(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_is_string(module: &mut Module) {
-    attach_runtime_body(module, "is_string", &[Type::Value], Type::Bool, |b| {
+    module.attach_runtime_body("is_string", &[Type::Value], Type::Bool, |b| {
         let x = b.param(0);
         let result = b.type_check(x, Type::String);
         b.ret(Some(result));
@@ -2204,7 +2059,7 @@ fn attach_body_is_string(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_is_undefined(module: &mut Module) {
-    attach_runtime_body(module, "is_undefined", &[Type::Value], Type::Bool, |b| {
+    module.attach_runtime_body("is_undefined", &[Type::Value], Type::Bool, |b| {
         let x = b.param(0);
         let result = b.type_check(x, Type::Void);
         b.ret(Some(result));
@@ -2217,7 +2072,7 @@ fn attach_body_is_undefined(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_is_array(module: &mut Module) {
-    attach_runtime_body(module, "is_array", &[Type::Value], Type::Bool, |b| {
+    module.attach_runtime_body("is_array", &[Type::Value], Type::Bool, |b| {
         let x = b.param(0);
         let result = b.type_check(x, Type::Array(Box::new(Type::Value)));
         b.ret(Some(result));
@@ -2230,7 +2085,7 @@ fn attach_body_is_array(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_is_method(module: &mut Module) {
-    attach_runtime_body(module, "is_method", &[Type::Value], Type::Bool, |b| {
+    module.attach_runtime_body("is_method", &[Type::Value], Type::Bool, |b| {
         let x = b.param(0);
         // Use a zero-param function type as the representative function type.
         // The backend dispatches on `Type::Function(_)` and emits `typeof x === "function"`.
@@ -2252,7 +2107,7 @@ fn attach_body_is_method(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_is_struct(module: &mut Module) {
-    attach_runtime_body(module, "is_struct", &[Type::Value], Type::Bool, |b| {
+    module.attach_runtime_body("is_struct", &[Type::Value], Type::Bool, |b| {
         let x = b.param(0);
         let result = b.call_named("is_struct_unknown", &[x], Type::Bool);
         b.ret(Some(result));
@@ -2265,7 +2120,7 @@ fn attach_body_is_struct(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_is_numeric(module: &mut Module) {
-    attach_runtime_body(module, "is_numeric", &[Type::Value], Type::Bool, |b| {
+    module.attach_runtime_body("is_numeric", &[Type::Value], Type::Bool, |b| {
         let x = b.param(0);
         let result = b.call_named("is_numeric_unknown", &[x], Type::Bool);
         b.ret(Some(result));
@@ -2278,7 +2133,7 @@ fn attach_body_is_numeric(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_typeof(module: &mut Module) {
-    attach_runtime_body(module, "_typeof", &[Type::Value], Type::String, |b| {
+    module.attach_runtime_body("_typeof", &[Type::Value], Type::String, |b| {
         let x = b.param(0);
         let result = b.call_named("typeof_gml", &[x], Type::String);
         b.ret(Some(result));
@@ -2290,7 +2145,7 @@ fn attach_body_typeof(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_real(module: &mut Module) {
-    attach_runtime_body(module, "real", &[Type::String], Type::Float(64), |b| {
+    module.attach_runtime_body("real", &[Type::String], Type::Float(64), |b| {
         let s = b.param(0);
         let result = b.call_named("to_number_str", &[s], Type::Float(64));
         b.ret(Some(result));
@@ -2302,7 +2157,7 @@ fn attach_body_real(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_pass(module: &mut Module) {
-    attach_runtime_body(module, "pass", &[], Type::Void, |b| {
+    module.attach_runtime_body("pass", &[], Type::Void, |b| {
         b.ret(None);
     });
 }
@@ -2312,8 +2167,7 @@ fn attach_body_pass(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_try_hook(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "__try_hook__",
         &[Type::Float(64), Type::Float(64)],
         Type::Void,
@@ -2330,7 +2184,7 @@ fn attach_body_try_hook(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_try_unhook(module: &mut Module) {
-    attach_runtime_body(module, "__try_unhook__", &[], Type::Void, |b| {
+    module.attach_runtime_body("__try_unhook__", &[], Type::Void, |b| {
         b.ret(None);
     });
 }
@@ -2342,8 +2196,7 @@ fn attach_body_try_unhook(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_approach(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "approach",
         &[Type::Float(64), Type::Float(64), Type::Float(64)],
         Type::Float(64),
@@ -2383,8 +2236,7 @@ fn attach_body_approach(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_angle_difference(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "angle_difference",
         &[Type::Float(64), Type::Float(64)],
         Type::Float(64),
@@ -2414,8 +2266,7 @@ fn attach_body_angle_difference(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_rectangle_in_rectangle(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "rectangle_in_rectangle",
         &[
             Type::Float(64),
@@ -2487,8 +2338,7 @@ fn attach_body_rectangle_in_rectangle(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_matrix_build(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "matrix_build",
         &[
             Type::Float(64),
@@ -2584,8 +2434,7 @@ fn attach_body_matrix_build(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_copy(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_copy",
         &[
             Type::Array(Box::new(Type::Value)),
@@ -2640,8 +2489,7 @@ fn attach_body_array_copy(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_equals(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_equals",
         &[
             Type::Array(Box::new(Type::Value)),
@@ -2699,8 +2547,7 @@ fn attach_body_array_equals(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_get(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_get",
         &[Type::Array(Box::new(Type::Value)), Type::Float(64)],
         Type::Value,
@@ -2720,8 +2567,7 @@ fn attach_body_array_get(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_set(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_set",
         &[
             Type::Array(Box::new(Type::Value)),
@@ -2746,8 +2592,7 @@ fn attach_body_array_set(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_height_2d(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_height_2d",
         &[Type::Array(Box::new(Type::Value))],
         Type::Float(64),
@@ -2766,8 +2611,7 @@ fn attach_body_array_height_2d(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_pop(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_pop",
         &[Type::Array(Box::new(Type::Value))],
         Type::Value,
@@ -2786,8 +2630,7 @@ fn attach_body_array_pop(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_delete(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_delete",
         &[
             Type::Array(Box::new(Type::Value)),
@@ -2812,8 +2655,7 @@ fn attach_body_array_delete(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_insert(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_insert",
         &[
             Type::Array(Box::new(Type::Value)),
@@ -2838,8 +2680,7 @@ fn attach_body_array_insert(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_resize(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_resize",
         &[Type::Array(Box::new(Type::Value)), Type::Float(64)],
         Type::Void,
@@ -2859,8 +2700,7 @@ fn attach_body_array_resize(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_get_index(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_get_index",
         &[Type::Array(Box::new(Type::Value)), Type::Value],
         Type::Float(64),
@@ -2970,8 +2810,7 @@ fn attach_body_point_in_triangle(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_variable_struct_exists(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "variable_struct_exists",
         &[Type::Value, Type::String],
         Type::Bool,
@@ -2990,8 +2829,7 @@ fn attach_body_variable_struct_exists(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_variable_struct_get(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "variable_struct_get",
         &[Type::Value, Type::String],
         Type::Value,
@@ -3010,8 +2848,7 @@ fn attach_body_variable_struct_get(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_variable_struct_names_count(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "variable_struct_names_count",
         &[Type::Value],
         Type::Float(64),
@@ -3030,8 +2867,7 @@ fn attach_body_variable_struct_names_count(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_sort(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_sort",
         &[Type::Array(Box::new(Type::Value)), Type::Bool],
         Type::Void,
@@ -3051,8 +2887,7 @@ fn attach_body_array_sort(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_array_unique(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "array_unique",
         &[
             Type::Array(Box::new(Type::Value)),
@@ -3080,8 +2915,7 @@ fn attach_body_array_unique(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_variable_struct_get_names(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "variable_struct_get_names",
         &[Type::Value],
         Type::Array(Box::new(Type::String)),
@@ -3103,8 +2937,7 @@ fn attach_body_variable_struct_get_names(module: &mut Module) {
 // ---------------------------------------------------------------------------
 
 fn attach_body_variable_struct_set(module: &mut Module) {
-    attach_runtime_body(
-        module,
+    module.attach_runtime_body(
         "variable_struct_set",
         &[Type::Value, Type::String, Type::Value],
         Type::Void,

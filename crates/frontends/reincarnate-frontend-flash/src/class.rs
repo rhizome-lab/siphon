@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use reincarnate_core::ir::{
-    AbstractMember, ClassDef, Constant, EntryPoint, ExternalImport, FieldDef, Function,
+    AbstractMember, ClassDef, Constant, EntryPoint, ExternalImport, FieldDef, FuncId, Function,
     FunctionSig, Global, MethodKind, Module, ModuleBuilder, Op, StaticField, StructDef,
     SystemCallTypeRule, Type, TypeId, Visibility,
 };
@@ -35,6 +35,7 @@ pub fn translate_class(
     abc: &AbcFile,
     class_idx: usize,
     class_type_ids: &HashMap<String, TypeId>,
+    registry: &HashMap<String, FuncId>,
 ) -> Result<ClassInfo, String> {
     let instance = &abc.instances[class_idx];
     let class = &abc.classes[class_idx];
@@ -89,6 +90,7 @@ pub fn translate_class(
         true,
         Some(&class_short_name),
         class_type_ids,
+        registry,
         &mut inner_functions,
     )? {
         func.namespace = class_ns.clone();
@@ -113,6 +115,7 @@ pub fn translate_class(
                 true,
                 Some(&class_short_name),
                 class_type_ids,
+                registry,
                 &mut inner_functions,
             )? {
                 func.namespace = class_ns.clone();
@@ -153,6 +156,7 @@ pub fn translate_class(
         true,
         None,
         class_type_ids,
+        registry,
         &mut inner_functions,
     )? {
         func.namespace = class_ns.clone();
@@ -183,6 +187,7 @@ pub fn translate_class(
                 true,
                 None,
                 class_type_ids,
+                registry,
                 &mut inner_functions,
             )? {
                 func.namespace = class_ns.clone();
@@ -407,6 +412,7 @@ fn find_private_ns_string(
 ///
 /// `has_self` indicates whether the first parameter is an implicit `this`.
 /// `class_name` provides the owning class name so `this` can be typed as `Instance(id)`.
+#[allow(clippy::too_many_arguments)]
 fn translate_class_method(
     abc: &AbcFile,
     method_idx: &Index<swf::avm2::types::Method>,
@@ -414,6 +420,7 @@ fn translate_class_method(
     has_self: bool,
     class_name: Option<&str>,
     class_type_ids: &HashMap<String, TypeId>,
+    registry: &HashMap<String, FuncId>,
     inner_functions: &mut Vec<Function>,
 ) -> Result<Option<Function>, String> {
     let idx = method_idx.0 as usize;
@@ -498,6 +505,7 @@ fn translate_class_method(
         sig,
         &param_names,
         has_self,
+        registry,
         inner_functions,
     )?;
     Ok(Some(func))
@@ -556,6 +564,12 @@ pub fn translate_abc_to_module(
 ) -> Result<Module, String> {
     let mut mb = ModuleBuilder::new(module_name);
 
+    // Register Flash polymorphic builtins (add_any) and attach their IR
+    // dispatch bodies before any method translation, then snapshot the
+    // runtime registry so translators can resolve them via `call_named`.
+    crate::runtime_bodies::register_runtime_bodies(mb.module_mut());
+    let registry = mb.module_mut().runtime_registry.clone();
+
     // Pre-intern TypeIds for all class names so translate_class_method can type `self` params.
     let class_type_ids: HashMap<String, TypeId> = (0..abc.instances.len())
         .map(|i| {
@@ -568,7 +582,7 @@ pub fn translate_abc_to_module(
 
     // Translate classes
     for i in 0..abc.instances.len() {
-        let info = translate_class(abc, i, &class_type_ids)?;
+        let info = translate_class(abc, i, &class_type_ids, &registry)?;
         let type_id = mb.add_struct(info.struct_def);
 
         let mut method_ids = Vec::new();

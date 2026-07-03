@@ -9,6 +9,7 @@ pub(crate) mod assets;
 pub(crate) mod bool_coerce;
 pub(crate) mod class;
 pub(crate) mod multiname;
+pub(crate) mod runtime_bodies;
 pub(crate) mod scope;
 pub(crate) mod translate;
 

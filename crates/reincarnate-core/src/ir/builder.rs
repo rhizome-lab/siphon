@@ -106,6 +106,16 @@ impl FunctionBuilder {
         self.registry = r;
     }
 
+    /// The name-to-FuncId registry installed via [`set_registry`].
+    ///
+    /// Used by frontends that need to propagate the registry into nested
+    /// translations (e.g. closure bodies translated recursively).
+    ///
+    /// [`set_registry`]: FunctionBuilder::set_registry
+    pub fn registry(&self) -> &HashMap<String, super::func::FuncId> {
+        &self.registry
+    }
+
     /// Emit a direct call by function name, resolving via the installed registry.
     ///
     /// Resolution order:
