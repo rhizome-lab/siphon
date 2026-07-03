@@ -4454,6 +4454,20 @@ All items verified empirically or by direct code reading. Ordered by severity.
      materialization: only demanded (engine, backend) pairs, not the full matrix) — and the
      platform interface is the load-bearing portability boundary under EVERY branch of this
      decision, which raises the priority of item 7's codify-and-enforce fix.
+
+     **Owner clarification (2026-07-03): M+N is CRITICAL, not optional — M×N is intractable.**
+     Each (engine, backend) runtime pair is ~9k LOC of behavioral-equivalence-critical code
+     (cf. Flash's 9,968 LOC and Twine's 8,580 LOC above), with cross-copy drift and no
+     conformance suite to catch it; the 25×5 target-matrix premise this file's frontend/backend
+     lists imply is unviable without an M+N mechanism. Per-pair handwritten runtimes are a
+     bridge for at most a pair or two while the gate is unmet — never a scaling strategy, and
+     the "lazy materialization" language above must not be misread as sanctioning
+     handwritten-per-pair at scale. Consequently the runtime-slice emit gate is ON THE CRITICAL
+     PATH, not merely a prerequisite to sequence behind: pipeline-quality work (item 1's
+     dispatch emission, the RC0006 backlog, item 4's union destruction) should be aimed at
+     passing this gate, not just understood as preceding it. The at-gate evaluation
+     (hand-authored IR bodies vs self-hosted-TS translation) chooses the M+N *mechanism* — it
+     does not choose whether to have one.
    - `TypeDecl::Object.parent: Option<TypeId>` (single parent) cannot represent AS3
      interfaces — neutrality is currently bought by discarding source info (Law 2/4). Honest
      form is multi-parent; join/LCA (item 9's `4de16db9`) must generalize to a
