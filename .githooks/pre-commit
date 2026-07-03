@@ -3,11 +3,13 @@
 
 set -e
 
-staged=$(git diff --cached --name-only)
-echo "Running cargo fmt..."
-cargo fmt
-if [ -n "$staged" ]; then
-  echo "$staged" | xargs git add
+STAGED_RS="$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs')"
+if [ -n "$STAGED_RS" ]; then
+  echo "Running rustfmt on staged files..."
+  echo "$STAGED_RS" | xargs -r rustfmt --edition 2021
+  echo "$STAGED_RS" | xargs -r git add --
+else
+  echo "No staged .rs files, skipping rustfmt."
 fi
 
 echo "Running cargo clippy..."
