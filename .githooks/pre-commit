@@ -13,8 +13,6 @@ else
 fi
 
 echo "Running cargo clippy..."
-cargo clippy --all-targets --all-features -- -D warnings 2>/dev/null || {
-    echo "  Warning: clippy check failed or not available (non-critical)"
-}
+cargo clippy --all-targets --all-features -- -D warnings
 
 echo "Pre-commit checks passed!"
