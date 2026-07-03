@@ -4,6 +4,18 @@ Completed items archived in [COMPLETED.md](COMPLETED.md).
 
 Per-engine roadmaps (gaps, runtime coverage, open work) live in [`docs/targets/`](docs/targets/). This file tracks in-flight and near-term work across all active engines.
 
+## setInstanceField argument-order reversal (Law 3, behavioral) (2026-07-03)
+
+Unmasked by the TS2304 fix: some GML pattern (likely compound assignment) emits
+`setInstanceField(value-expr, field, cls)` where the runtime signature is
+`(cls, field, value)` -- e.g. Bounty `_init.ts:376`
+`_rt.setInstanceField((_rt.getInstanceField(3.0, "cash") as number) + 100.0, "cash", 3.0)`
+vs the correctly-ordered call at line 383 and the correctly-ordered inner
+getInstanceField on the same line. The backend rewrite preserves IR arg order
+uniformly, so the reversal originates in the frontend/lowering for that pattern.
+Previously invisible behind TS2304 (`any`-typed callee); now part of the risen
+TS2345 bucket. Behavioral wrong-writes at runtime -- high priority.
+
 ## `ValidateNoEscapedTypeVars` — source-location granularity (follow-up)
 
 `ValidateNoEscapedTypeVars` (pass `validate-no-escaped-type-vars`) emits `EscapedTypeVar`
