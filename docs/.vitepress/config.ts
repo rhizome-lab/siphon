@@ -8,16 +8,18 @@ export default withMermaid(
         include: ['mermaid'],
       },
     },
-    title: 'Reincarnate',
+    title: 'reincarnate',
     description: 'Legacy software lifting framework',
 
     base: '/reincarnate/',
+
+    srcExclude: ['**/CLAUDE.md'],
 
     themeConfig: {
       nav: [
         { text: 'Guide', link: '/introduction' },
         { text: 'Targets', link: '/targets/' },
-        { text: 'RHI', link: 'https://docs.rhi.zone/' },
+        { text: 'rhi', link: 'https://docs.rhi.zone/' },
       ],
 
       sidebar: {
